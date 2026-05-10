@@ -1,13 +1,17 @@
 import os
 import re
 import json
+import threading
+import time
+import requests
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import (
     Configuration, ApiClient, MessagingApi,
-    ReplyMessageRequest, TextMessage
+    ReplyMessageRequest, TextMessage,
+    PushMessageRequest
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 import gspread
@@ -350,6 +354,45 @@ def handle_message(event):
 @app.route("/", methods=["GET"])
 def index():
     return "LINE Bot is running!"
+
+
+def keep_alive():
+    """每 5 分鐘 ping 自己，防止 Render 休眠"""
+    time.sleep(60)  # 等待啟動完成
+    while True:
+        try:
+            url = os.environ.get("SELF_URL", "")
+            if url:
+                requests.get(url, timeout=10)
+        except Exception:
+            pass
+        time.sleep(5 * 60)  # 每 5 分鐘
+
+
+def send_startup_notification():
+    """啟動時傳 LINE 通知給主人"""
+    time.sleep(5)  # 等待 Flask 完全啟動
+    owner_id = os.environ.get("OWNER_LINE_ID", "")
+    if not owner_id:
+        return
+    try:
+        tz = timezone(timedelta(hours=8))
+        now = datetime.now(tz).strftime("%H:%M")
+        with ApiClient(configuration) as api_client:
+            line_bot_api = MessagingApi(api_client)
+            line_bot_api.push_message(
+                PushMessageRequest(
+                    to=owner_id,
+                    messages=[TextMessage(text=f"🤖 記帳 Bot 已啟動！\n⏰ 時間：{now}\n\n現在可以正常使用了 ✅")]
+                )
+            )
+    except Exception:
+        pass
+
+
+# 啟動背景執行緒
+threading.Thread(target=keep_alive, daemon=True).start()
+threading.Thread(target=send_startup_notification, daemon=True).start()
 
 
 if __name__ == "__main__":
